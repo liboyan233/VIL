@@ -138,3 +138,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# ckpt
+/ckpt
+/ckpt_test
+
+# test file
+test*.py

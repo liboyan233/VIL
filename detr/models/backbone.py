@@ -15,7 +15,10 @@ from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
 
+from typing import Optional
 import IPython
+import copy
+from warnings import warn
 e = IPython.embed
 
 class FrozenBatchNorm2d(torch.nn.Module):
@@ -64,15 +67,30 @@ class BackboneBase(nn.Module):
         # for name, parameter in backbone.named_parameters(): # only train later layers # TODO do we want this?
         #     if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
         #         parameter.requires_grad_(False)
-        if return_interm_layers:
+        self.swin = False
+        if backbone.__class__.__name__ == 'SwinTransformer':
+            return_layers = {"features": "0"}
+            self.swin = True
+        elif backbone.__class__.__name__ == 'VisionTransformer':
+            backbone.heads = torch.nn.Identity()  # remove classification head
+            return_layers = None
+        elif return_interm_layers:
             return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
         else:
             return_layers = {'layer4': "0"}
-        self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        if return_layers is not None:
+            self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        else:
+            self.body = backbone
         self.num_channels = num_channels
+        # self.ada_feature = nn.Conv2d(in_channels=768, out_channels=512, kernel_size=1) # TODO do we want this?
 
     def forward(self, tensor):
         xs = self.body(tensor)
+        if self.swin:
+            for name, x in xs.items():
+                xs[name] = x.permute(0, 3, 1, 2)
+                # xs[name] = self.ada_feature(x.permute(0, 3, 1, 2))  # N,C,_,_        
         return xs
         # out: Dict[str, NestedTensor] = {}
         # for name, x in xs.items():
@@ -88,11 +106,57 @@ class Backbone(BackboneBase):
     def __init__(self, name: str,
                  train_backbone: bool,
                  return_interm_layers: bool,
-                 dilation: bool):
-        backbone = getattr(torchvision.models, name)(
-            replace_stride_with_dilation=[False, False, dilation],
-            pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+                 dilation: Optional[bool] = False,
+                 swin_local_ckpt: Optional[str] = None,
+                 freeze_backbone: Optional[bool] = False):
+        if name == 'swin_tiny':
+            warn("=== Using Swin Transformer Tiny Backbone ===")
+
+            if swin_local_ckpt == "default":
+                warn("=== Loading default checkpoint ===")
+                backbone = getattr(torchvision.models, 'swin_t')(weights='DEFAULT')
+            elif swin_local_ckpt is not None and swin_local_ckpt != "None":
+                warn(f"=== Loading checkpoint from {swin_local_ckpt} ===")
+                backbone = getattr(torchvision.models, 'swin_t')(weights=None)
+                miss_key, unexpected_key = load_swint(swin_local_ckpt, backbone)
+                warn(f"=== Checkpoint loaded with {len(miss_key)} missing keys and {len(unexpected_key)} unexpected keys. ===")
+            else:
+                warn("=== Traing from scratch! ===")
+                backbone = getattr(torchvision.models, 'swin_t')(weights=None)
+            
+            if freeze_backbone:
+                for _, parameter in backbone.named_parameters():
+                    parameter.requires_grad_(False)
+                warn("=== Freezing backbone parameters ===")
+            else:
+                warn("=== Updating backbone parameters ===")
+        elif 'vit' in name:
+            warn("=== Using ViT Backbone ===")
+            backbone = getattr(torchvision.models, name)(weights='DEFAULT')
+            if freeze_backbone:
+                for _, parameter in backbone.named_parameters():
+                    parameter.requires_grad_(False)
+                warn("=== Freezing backbone parameters ===")
+            else:
+                warn("=== Updating backbone parameters ===")
+        else:
+            warn(f"=== Using {name} Backbone ===")
+            backbone = getattr(torchvision.models, name)(
+                replace_stride_with_dilation=[False, False, dilation],
+                pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+            if freeze_backbone:
+                for _, parameter in backbone.named_parameters():
+                    parameter.requires_grad_(False)
+                warn("=== Freezing backbone parameters ===")
+        
         num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+        print("Name:", name)
+        if name == 'swin_tiny':
+            num_channels = 768
+            # print("=== Swin Transformer Tiny Backbone ===")
+        elif name == 'vit':
+            num_channels = 768
+            # print("=== ViT Backbone ===")
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
 
 
@@ -101,14 +165,18 @@ class Joiner(nn.Sequential):
         super().__init__(backbone, position_embedding)
 
     def forward(self, tensor_list: NestedTensor):
-        xs = self[0](tensor_list)
+        xs = self[0](tensor_list)  # take the first element for nn.Sequential, i.e. backbone
         out: List[NestedTensor] = []
         pos = []
-        for name, x in xs.items():
-            out.append(x)
-            # position encoding
-            pos.append(self[1](x).to(x.dtype))
-
+        try:
+            for name, x in xs.items():
+                out.append(x)  # x shape: [N, C, H, W]
+                # position encoding
+                pos.append(self[1](x).to(x.dtype))
+        except:
+            out.append(xs)
+            pos.append(self[1](xs).to(xs.dtype))
+            
         return out, pos
 
 
@@ -116,7 +184,132 @@ def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, args.swin_local_ckpt, args.freeze_backbone)
     model = Joiner(backbone, position_embedding)
     model.num_channels = backbone.num_channels
     return model
+
+
+def load_swint(ckpt_path, backbone):
+
+    key_mapping = {
+        "encoder.patch_embed.proj": "features.0.0",
+        "encoder.patch_embed.norm": "features.0.2",
+        "encoder.layers.0.blocks.0": "features.1.0",
+        "encoder.layers.0.blocks.1": "features.1.1",
+        "encoder.layers.0.downsample": "features.2",
+        "encoder.layers.1.blocks.0": "features.3.0",
+        "encoder.layers.1.blocks.1": "features.3.1",
+        "encoder.layers.1.downsample": "features.4",
+        "encoder.layers.2.blocks.0": "features.5.0",
+        "encoder.layers.2.blocks.1": "features.5.1",
+        "encoder.layers.2.blocks.2": "features.5.2",
+        "encoder.layers.2.blocks.3": "features.5.3",
+        "encoder.layers.2.blocks.4": "features.5.4",
+        "encoder.layers.2.blocks.5": "features.5.5",
+        "encoder.layers.2.downsample": "features.6",
+        "encoder.layers.3.blocks.0": "features.7.0",
+        "encoder.layers.3.blocks.1": "features.7.1",
+        "encoder.norm": "norm"
+    }
+
+    specified = {
+        "encoder.layers.0.blocks.0.mlp.fc1.weight": "features.1.0.mlp.0.weight",
+        "encoder.layers.0.blocks.0.mlp.fc1.bias": "features.1.0.mlp.0.bias",
+        "encoder.layers.0.blocks.0.mlp.fc2.weight": "features.1.0.mlp.3.weight",
+        "encoder.layers.0.blocks.0.mlp.fc2.bias": "features.1.0.mlp.3.bias",
+        "encoder.layers.0.blocks.1.mlp.fc1.weight": "features.1.1.mlp.0.weight",
+        "encoder.layers.0.blocks.1.mlp.fc1.bias": "features.1.1.mlp.0.bias",
+        "encoder.layers.0.blocks.1.mlp.fc2.weight": "features.1.1.mlp.3.weight",
+        "encoder.layers.0.blocks.1.mlp.fc2.bias": "features.1.1.mlp.3.bias",
+        'encoder.layers.1.blocks.0.mlp.fc1.weight': "features.3.0.mlp.0.weight", 
+        'encoder.layers.1.blocks.0.mlp.fc1.bias': "features.3.0.mlp.0.bias", 
+        'encoder.layers.1.blocks.0.mlp.fc2.weight': "features.3.0.mlp.3.weight", 
+        'encoder.layers.1.blocks.0.mlp.fc2.bias': "features.3.0.mlp.3.bias",
+        'encoder.layers.1.blocks.1.mlp.fc1.weight': "features.3.1.mlp.0.weight", 
+        'encoder.layers.1.blocks.1.mlp.fc1.bias': "features.3.1.mlp.0.bias", 
+        'encoder.layers.1.blocks.1.mlp.fc2.weight': "features.3.1.mlp.3.weight", 
+        'encoder.layers.1.blocks.1.mlp.fc2.bias': "features.3.1.mlp.3.bias",
+        'encoder.layers.2.blocks.0.mlp.fc1.weight': "features.5.0.mlp.0.weight", 
+        'encoder.layers.2.blocks.0.mlp.fc1.bias': "features.5.0.mlp.0.bias", 
+        'encoder.layers.2.blocks.0.mlp.fc2.weight': "features.5.0.mlp.3.weight", 
+        'encoder.layers.2.blocks.0.mlp.fc2.bias': "features.5.0.mlp.3.bias", 
+        'encoder.layers.2.blocks.1.mlp.fc1.weight': "features.5.1.mlp.0.weight", 
+        'encoder.layers.2.blocks.1.mlp.fc1.bias': "features.5.1.mlp.0.bias", 
+        'encoder.layers.2.blocks.1.mlp.fc2.weight': "features.5.1.mlp.3.weight", 
+        'encoder.layers.2.blocks.1.mlp.fc2.bias': "features.5.1.mlp.3.bias",
+        'encoder.layers.2.blocks.2.mlp.fc1.weight': "features.5.2.mlp.0.weight", 
+        'encoder.layers.2.blocks.2.mlp.fc1.bias': "features.5.2.mlp.0.bias", 
+        'encoder.layers.2.blocks.2.mlp.fc2.weight': "features.5.2.mlp.3.weight", 
+        'encoder.layers.2.blocks.2.mlp.fc2.bias': "features.5.2.mlp.3.bias",
+
+        'encoder.layers.2.blocks.3.mlp.fc1.weight': "features.5.3.mlp.0.weight",
+        'encoder.layers.2.blocks.3.mlp.fc1.bias': "features.5.3.mlp.0.bias",
+        'encoder.layers.2.blocks.3.mlp.fc2.weight': "features.5.3.mlp.3.weight",
+        'encoder.layers.2.blocks.3.mlp.fc2.bias': "features.5.3.mlp.3.bias",
+
+        'encoder.layers.2.blocks.4.mlp.fc1.weight': "features.5.4.mlp.0.weight",
+        'encoder.layers.2.blocks.4.mlp.fc1.bias': "features.5.4.mlp.0.bias",
+        'encoder.layers.2.blocks.4.mlp.fc2.weight': "features.5.4.mlp.3.weight",
+        'encoder.layers.2.blocks.4.mlp.fc2.bias': "features.5.4.mlp.3.bias",
+
+        'encoder.layers.2.blocks.5.mlp.fc1.weight': "features.5.5.mlp.0.weight",
+        'encoder.layers.2.blocks.5.mlp.fc1.bias': "features.5.5.mlp.0.bias",
+        'encoder.layers.2.blocks.5.mlp.fc2.weight': "features.5.5.mlp.3.weight",
+        'encoder.layers.2.blocks.5.mlp.fc2.bias': "features.5.5.mlp.3.bias",
+
+        'encoder.layers.3.blocks.0.mlp.fc1.weight': "features.7.0.mlp.0.weight",
+        'encoder.layers.3.blocks.0.mlp.fc1.bias': "features.7.0.mlp.0.bias",
+        'encoder.layers.3.blocks.0.mlp.fc2.weight': "features.7.0.mlp.3.weight",
+        'encoder.layers.3.blocks.0.mlp.fc2.bias': "features.7.0.mlp.3.bias",
+
+        'encoder.layers.3.blocks.1.mlp.fc1.weight': "features.7.1.mlp.0.weight",
+        'encoder.layers.3.blocks.1.mlp.fc1.bias': "features.7.1.mlp.0.bias",
+        'encoder.layers.3.blocks.1.mlp.fc2.weight': "features.7.1.mlp.3.weight",
+        'encoder.layers.3.blocks.1.mlp.fc2.bias': "features.7.1.mlp.3.bias",
+        
+    }
+
+    state_dict = torch.load(ckpt_path)
+    param_dict = state_dict['model']
+
+    # May need some adjustions on key names
+    copy_ckpt = copy.deepcopy(param_dict)
+    for k, _ in param_dict.items():
+        if not k.startswith("encoder."):
+            copy_ckpt.pop(k) 
+        elif k.startswith('predictor'):
+            copy_ckpt.pop(k)
+        elif 'attn_mask' in k:
+            copy_ckpt.pop(k)
+        elif 'queue' in k:
+            copy_ckpt.pop(k)
+        else:
+            continue
+        # TODO add key mappings 
+    # print('existed keys:', state_dict['model'].keys())
+    map_keys = list(key_mapping.keys()) 
+    ada_ckpt = OrderedDict()
+    for k, v in copy_ckpt.items():
+        if 'relative_position_index' in k:
+            v = v.reshape(-1)  
+        if k in specified:
+            ada_ckpt[specified[k]] = v
+            # print(f"Mapping {k} to {specified[k]}")
+        else:
+            for map_key in map_keys:
+                if map_key in k:
+                    new_key = k.replace(map_key, key_mapping[map_key])
+                    ada_ckpt[new_key] = v
+                    # print(f"Mapping {k} to {new_key}")
+                    break
+    
+    miss_key, unexpected_key = backbone.load_state_dict(ada_ckpt, strict=False)
+    for name, module in backbone.named_modules(): # TODO whether to freeze norm layers
+        if isinstance(module, torch.nn.LayerNorm):
+            for param in module.parameters():
+                param.requires_grad = False
+    # print('miss_key:', miss_key)
+    # print('unexpected_key:', unexpected_key)
+    # not for classification . instead adapt the feature dim
+    return miss_key, unexpected_key

@@ -60,7 +60,8 @@ class Transformer(nn.Module):
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
 
             addition_input = torch.stack([latent_input, proprio_input], axis=0)
-            src = torch.cat([addition_input, src], axis=0)
+            
+            src = torch.cat([addition_input, src], dim=0)
         else:
             assert len(src.shape) == 3
             # flatten NxHWxC to HWxNxC
@@ -68,7 +69,7 @@ class Transformer(nn.Module):
             src = src.permute(1, 0, 2)
             pos_embed = pos_embed.unsqueeze(1).repeat(1, bs, 1)
             query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-
+        
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
         hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,

@@ -3,7 +3,7 @@ import torch
 import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
-
+from warnings import warn
 import IPython
 e = IPython.embed
 
@@ -16,6 +16,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.norm_stats = norm_stats
         self.is_sim = None
         self.__getitem__(0) # initialize self.is_sim
+        warn(f'Dataset initialized with camera names: {self.camera_names}')
 
     def __len__(self):
         return len(self.episode_ids)
@@ -108,7 +109,7 @@ def get_norm_stats(dataset_dir, num_episodes):
     return stats
 
 
-def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val):
+def load_data(dataset_dir, num_episodes, camera_cfg, batch_size_train, batch_size_val):
     print(f'\nData from: {dataset_dir}\n')
     # obtain train test split
     train_ratio = 0.8
@@ -120,8 +121,11 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
     norm_stats = get_norm_stats(dataset_dir, num_episodes)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats)
+    train_cams = camera_cfg['train_camera_names']
+    val_cams = camera_cfg['test_camera_names']
+
+    train_dataset = EpisodicDataset(train_indices, dataset_dir, train_cams, norm_stats)
+    val_dataset = EpisodicDataset(val_indices, dataset_dir, val_cams, norm_stats)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 

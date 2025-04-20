@@ -9,9 +9,10 @@ e = IPython.embed
 class ACTPolicy(nn.Module):
     def __init__(self, args_override):
         super().__init__()
-        model, optimizer = build_ACT_model_and_optimizer(args_override)
+        model, optimizer, lr_scheduler = build_ACT_model_and_optimizer(args_override)
         self.model = model # CVAE decoder
         self.optimizer = optimizer
+        self.lr_scheduler = lr_scheduler
         self.kl_weight = args_override['kl_weight']
         print(f'KL Weight {self.kl_weight}')
 

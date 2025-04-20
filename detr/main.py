@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from .models import build_ACT_model, build_CNNMLP_model
 
 import IPython
@@ -22,7 +23,7 @@ def get_args_parser():
 
     # Model parameters
     # * Backbone
-    parser.add_argument('--backbone', default='resnet18', type=str, # will be overridden
+    parser.add_argument('--backbone', default='swin_t', type=str, # will be overridden
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', action='store_true',
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
@@ -30,7 +31,11 @@ def get_args_parser():
                         help="Type of positional embedding to use on top of the image features")
     parser.add_argument('--camera_names', default=[], type=list, # will be overridden
                         help="A list of camera names")
+    # path = '/home/bohanfeng/Desktop/liboyan/Imitation_learning/Transformer-SSL/output/moby__swin_tiny__patch4_window7_224__odpr02_tdpr0_cm099_ct02_queue4096_proj2_pred2/default/checkpoint.pth'
 
+    parser.add_argument('--swin_local_ckpt', default='default', type=str, # will be overridden
+                        help="Path to local checkpoint for Swin tiny")
+    parser.add_argument('--freeze_backbone', default=True, type=bool) # will be overridden
     # * Transformer
     parser.add_argument('--enc_layers', default=4, type=int, # will be overridden
                         help="Number of encoding layers in the transformer")
@@ -74,6 +79,12 @@ def build_ACT_model_and_optimizer(args_override):
     for k, v in args_override.items():
         setattr(args, k, v)
 
+    if args.swin_local_ckpt is 'None' and args.freeze_backbone:
+        raise ValueError("pretrained ckpt is None but backbone is frozen")
+
+        # if path is None and freeze:
+    #     raise ValueError("pretrained ckpt is None but backbone is frozen")
+
     model = build_ACT_model(args)
     model.cuda()
 
@@ -84,10 +95,26 @@ def build_ACT_model_and_optimizer(args_override):
             "lr": args.lr_backbone,
         },
     ]
-    optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
-                                  weight_decay=args.weight_decay)
+    
+    optimizer = torch.optim.AdamW(param_dicts, lr=args.lr, weight_decay=args.weight_decay, 
+                                  betas=args.betas if 'betas' in args else (0.9, 0.999))
+    # print('set betas:', args.betas)
+    # print('optimizer betas:', optimizer.param_groups[0]['betas'])
 
-    return model, optimizer
+    # build lr scheduler
+    
+    if args.lr_scheduler == 'cosine':
+        warm_up_epochs = 5
+        warmup_scheduler = LinearLR(optimizer, start_factor=1e-3, total_iters=warm_up_epochs)
+        CosineLR_scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs - warm_up_epochs, eta_min=1e-6)
+        lr_scheduler = SequentialLR(optimizer, [warmup_scheduler, CosineLR_scheduler], [warm_up_epochs])
+
+    elif args.lr_scheduler == 'None' or args.lr_scheduler is None:
+        lr_scheduler = None
+    else:
+        raise ValueError(f"Unknown lr scheduler: {args.lr_scheduler}")
+
+    return model, optimizer, lr_scheduler
 
 
 def build_CNNMLP_model_and_optimizer(args_override):

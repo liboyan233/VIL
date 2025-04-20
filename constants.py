@@ -1,13 +1,15 @@
 import pathlib
 
 ### Task parameters
-DATA_DIR = '<put your data dir here>'
+DATA_DIR = '/home/data/liboyan/dataset/act'
 SIM_TASK_CONFIGS = {
     'sim_transfer_cube_scripted':{
         'dataset_dir': DATA_DIR + '/sim_transfer_cube_scripted',
-        'num_episodes': 50,
+        'num_episodes': 45,
         'episode_len': 400,
-        'camera_names': ['top']
+        'camera_names': ['top', 'left', 'right'],
+        'train_camera_names': ['top', 'left'], # 'top', 'left'
+        'test_camera_names': ['top', 'left'] # 'top', 'right'
     },
 
     'sim_transfer_cube_human':{
@@ -21,7 +23,7 @@ SIM_TASK_CONFIGS = {
         'dataset_dir': DATA_DIR + '/sim_insertion_scripted',
         'num_episodes': 50,
         'episode_len': 400,
-        'camera_names': ['top']
+        'camera_names': ['top', 'left', 'right']
     },
 
     'sim_insertion_human': {
@@ -30,6 +32,13 @@ SIM_TASK_CONFIGS = {
         'episode_len': 500,
         'camera_names': ['top']
     },
+
+    'roboset_scene1': {
+        'dataset_dir': '/home/data/liboyan/dataset/RoboSet/source/baking_pick_bowl_scene_2/validation/',
+        'num_episodes': None,
+        'episode_len': 42,
+        'camera_names': ['default1', 'default2'] # , 'default3'
+    }
 }
 
 ### Simulation envs fixed constants
