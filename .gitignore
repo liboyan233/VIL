@@ -145,3 +145,4 @@ dmypy.json
 
 # test file
 test*.py
+*.png 
