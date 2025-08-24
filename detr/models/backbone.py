@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 import torchvision
 from torch import nn
+import torch.nn.functional as F
 from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
 
@@ -20,6 +21,7 @@ import IPython
 import copy
 from warnings import warn
 e = IPython.embed
+vit_flag = False  # TODO, implement it wisely
 
 class FrozenBatchNorm2d(torch.nn.Module):
     """
@@ -68,12 +70,19 @@ class BackboneBase(nn.Module):
         #     if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
         #         parameter.requires_grad_(False)
         self.swin = False
+        self.vit = False
+        print("Backbone:", backbone.__class__.__name__)
         if backbone.__class__.__name__ == 'SwinTransformer':
             return_layers = {"features": "0"}
             self.swin = True
-        elif backbone.__class__.__name__ == 'VisionTransformer':
-            backbone.heads = torch.nn.Identity()  # remove classification head
+        elif backbone.__class__.__name__ == 'VisionTransformer' or backbone.__class__.__name__ == 'DinoVisionTransformer':
+            print("this is a ViT backbone")
+            # backbone.heads = torch.nn.Identity()  # remove classification head
             return_layers = None
+            self.vit = True
+            global vit_flag
+            vit_flag = True
+
         elif return_interm_layers:
             return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
         else:
@@ -83,14 +92,35 @@ class BackboneBase(nn.Module):
         else:
             self.body = backbone
         self.num_channels = num_channels
-        # self.ada_feature = nn.Conv2d(in_channels=768, out_channels=512, kernel_size=1) # TODO do we want this?
+        if self.swin:
+            self.ada_feature = nn.Conv2d(in_channels=768, out_channels=512, kernel_size=1) # TODO do we want this?
+        elif self.vit:
+            self.avg_pool = nn.AdaptiveAvgPool2d((7, 7))  # for ViT
+            self.ada_feature = nn.Sequential(
+                nn.Conv2d(384, 512, kernel_size=3, stride=2, padding=1),  # Downsamples and projects
+                nn.ReLU()
+            )
 
     def forward(self, tensor):
-        xs = self.body(tensor)
-        if self.swin:
-            for name, x in xs.items():
-                xs[name] = x.permute(0, 3, 1, 2)
-                # xs[name] = self.ada_feature(x.permute(0, 3, 1, 2))  # N,C,_,_        
+        try:
+            features = self.body.forward_features(tensor)  # for ViT, use forward_features
+            patch_tokens = features["x_norm_patchtokens"]  # [1, 256, 384]
+            features = patch_tokens.permute(0, 2, 1).reshape(-1, 384, 16, 16)
+            xs = self.ada_feature(features)  # [N, C, H, W]
+            xs = self.avg_pool(xs)  # [N, C, 7, 7] for ViT
+            warn(' using vit branch ')
+
+            return xs  # [N, C, H, W]
+        except:
+            xs = self.body(tensor)
+            # print("swin:", self.swin, " vit:", self.vit)
+            # print("vit output shape:", xs.shape)
+            # xs = self.ada_feature(xs.permute(0, 3, 1, 2))  # N,C,_,_
+            if self.swin:
+                for name, x in xs.items():
+                    xs[name] = self.ada_feature(x.permute(0, 3, 1, 2))
+            # elif self.vit:
+           
         return xs
         # out: Dict[str, NestedTensor] = {}
         # for name, x in xs.items():
@@ -100,6 +130,20 @@ class BackboneBase(nn.Module):
         #     out[name] = NestedTensor(x, mask)
         # return out
 
+# class SwinWrapper(nn.Module):
+#     def __init__(self, backbone: nn.Module, input_channels, output_channels: int):
+#         super().__init__()
+#         self.body = backbone
+#         self.num_channels = output_channels
+#         if input_channels != output_channels:
+#             self.ada_feature = nn.Conv2d(in_channels=input_channels, out_channels=output_channels, kernel_size=1)
+#         else:
+#             self.ada_feature = nn.Identity()
+
+#     def forward(self, tensor):
+#         xs = self.body(tensor)
+#         xs = self.ada_feature(xs)
+#         return xs
 
 class Backbone(BackboneBase):
     """ResNet backbone with frozen BatchNorm."""
@@ -109,21 +153,31 @@ class Backbone(BackboneBase):
                  dilation: Optional[bool] = False,
                  swin_local_ckpt: Optional[str] = None,
                  freeze_backbone: Optional[bool] = False):
+
+        num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+        if name == 'swin_tiny':
+            num_channels = 784
+            # print("=== Swin Transformer Tiny Backbone ===")
+        elif name == 'vit':
+            num_channels = 384
+            # print("=== ViT Backbone ===")
+
         if name == 'swin_tiny':
             warn("=== Using Swin Transformer Tiny Backbone ===")
-
             if swin_local_ckpt == "default":
                 warn("=== Loading default checkpoint ===")
                 backbone = getattr(torchvision.models, 'swin_t')(weights='DEFAULT')
+                # backbone = SwinWrapper(backbone, num_channels, 512)
             elif swin_local_ckpt is not None and swin_local_ckpt != "None":
                 warn(f"=== Loading checkpoint from {swin_local_ckpt} ===")
                 backbone = getattr(torchvision.models, 'swin_t')(weights=None)
                 miss_key, unexpected_key = load_swint(swin_local_ckpt, backbone)
                 warn(f"=== Checkpoint loaded with {len(miss_key)} missing keys and {len(unexpected_key)} unexpected keys. ===")
+                # backbone = SwinWrapper(backbone, num_channels, 512)
             else:
                 warn("=== Traing from scratch! ===")
                 backbone = getattr(torchvision.models, 'swin_t')(weights=None)
-            
+                # backbone = SwinWrapper(backbone, num_channels, 512)
             if freeze_backbone:
                 for _, parameter in backbone.named_parameters():
                     parameter.requires_grad_(False)
@@ -132,7 +186,8 @@ class Backbone(BackboneBase):
                 warn("=== Updating backbone parameters ===")
         elif 'vit' in name:
             warn("=== Using ViT Backbone ===")
-            backbone = getattr(torchvision.models, name)(weights='DEFAULT')
+            backbone = torch.hub.load('facebookresearch/dinov2:main', 'dinov2_vits14')
+            # backbone = getattr(torchvision.models, name)(weights='DEFAULT')
             if freeze_backbone:
                 for _, parameter in backbone.named_parameters():
                     parameter.requires_grad_(False)
@@ -149,14 +204,7 @@ class Backbone(BackboneBase):
                     parameter.requires_grad_(False)
                 warn("=== Freezing backbone parameters ===")
         
-        num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        print("Name:", name)
-        if name == 'swin_tiny':
-            num_channels = 768
-            # print("=== Swin Transformer Tiny Backbone ===")
-        elif name == 'vit':
-            num_channels = 768
-            # print("=== ViT Backbone ===")
+
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
 
 
@@ -165,18 +213,33 @@ class Joiner(nn.Sequential):
         super().__init__(backbone, position_embedding)
 
     def forward(self, tensor_list: NestedTensor):
+        # print(f"Using backbone {self[0].body.__class__.__name__} with position encoding {self[1].__class__.__name__}")
+        if vit_flag:
+            tensor_list = F.interpolate(
+                tensor_list,
+                size=(224, 224),
+                mode='bilinear',  # or 'bicubic', 'nearest'
+                align_corners=False  # Set to True if using 'bilinear'/'bicubic' for legacy behavior
+            )
+            warn("=== interpolating input for ViT backbone ===")
         xs = self[0](tensor_list)  # take the first element for nn.Sequential, i.e. backbone
+        # if isinstance(xs, (list, tuple)):
+        #     print("Backbone output is a list or tuple, converting to dict")
+        # elif isinstance(xs, torch.Tensor):
+        #     print("shape of xs:", xs.shape)
         out: List[NestedTensor] = []
         pos = []
-        try:
+        try:  # 
             for name, x in xs.items():
                 out.append(x)  # x shape: [N, C, H, W]
+                print('backbone output shape:', x.shape, 'with backbone', self[0].body.__class__.__name__)
                 # position encoding
                 pos.append(self[1](x).to(x.dtype))
         except:
-            out.append(xs)
+            out.append(xs)  # should also be in shape [N, C, H, W]
+            print('backbone output shape1:', xs.shape)
+
             pos.append(self[1](xs).to(xs.dtype))
-            
         return out, pos
 
 

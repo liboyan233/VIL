@@ -48,8 +48,8 @@ def load_data_online(dataset_dir, batch_size_train, batch_size_val, transform=No
     # construct dataset and dataloader
     train_dataset = RoboSetDataset(dataset_dir, train_cam, norm_stats=None, transform=transform)
     val_dataset = RoboSetDataset(dataset_dir, eval_cam, train_dataset.norm_stats, transform=transform)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, prefetch_factor=1, num_workers=1)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, prefetch_factor=1, num_workers=1)
 
     return train_dataloader, val_dataloader, train_dataset.norm_stats
 

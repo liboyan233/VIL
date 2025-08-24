@@ -109,9 +109,12 @@ class BimanualViperXTask(base.Task):
         obs['images'] = dict()
         obs['images']['top'] = physics.render(height=480, width=640, camera_id='top')
         obs['images']['angle'] = physics.render(height=480, width=640, camera_id='angle')
-        obs['images']['vis'] = physics.render(height=480, width=640, camera_id='front_close')
+        # obs['images']['vis'] = physics.render(height=480, width=640, camera_id='front_close')
         obs['images']['left'] = physics.render(height=480, width=640, camera_id='left')
         obs['images']['right'] = physics.render(height=480, width=640, camera_id='right')
+        obs['images']['wrist'] = physics.render(height=480, width=640, camera_id='right_wrist')
+        obs['images']['wrist2'] = physics.render(height=480, width=640, camera_id='left_wrist')
+
         return obs
 
     def get_reward(self, physics):

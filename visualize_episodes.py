@@ -141,7 +141,18 @@ def visualize_timestamp(t_list, dataset_path):
     plt.close()
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_dir', action='store', type=str, help='Dataset dir.', required=True)
-    parser.add_argument('--episode_idx', action='store', type=int, help='Episode index.', required=False)
-    main(vars(parser.parse_args()))
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--dataset_dir', action='store', type=str, help='Dataset dir.', required=True)
+    # parser.add_argument('--episode_idx', action='store', type=int, help='Episode index.', required=False)
+    # main(vars(parser.parse_args()))
+
+    for i in range(1):
+        args = {
+            'dataset_dir': '/home/data/',
+            # '/home/data/liboyan/dataset/act/sim_insertion_scripted/',
+            'episode_idx': i,
+        }
+        main(args)
+        # change episode_idx to 0-49
+        
+        

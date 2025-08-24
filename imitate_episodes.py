@@ -26,9 +26,10 @@ from warnings import warn
 import warnings
 from colorama import Fore, Style
 import IPython
+import time
 CUDA_LAUNCH_BLOCKING=1
 e = IPython.embed
-matplotlib.use('Agg') 
+# matplotlib.use('Agg') 
 
 def custom_showwarning(message, category, filename, lineno, file=None, line=None):
     print(f"{Fore.YELLOW}Warning:{Style.RESET_ALL} {message} ({filename}:{lineno})")
@@ -65,8 +66,8 @@ def main(args):
 
     # fixed parameters
     state_dim = 14  # 8 for roboset, 14 for sim_transfer_cube
-    lr_backbone = 1e-5  # set to 0 if not fine-tuned
-    backbone = ['resnet18', 'swin_tiny'] # 'resnet18' or 'swin_tiny' or 'vit_b_16'
+    lr_backbone = 5e-6  # set to 0 if not fine-tuned
+    backbone = ['resnet18','resnet18','vit_b_16'] # 'resnet18' or 'swin_tiny' or 'vit_b_16'
 
     camera_config = {
         'train_camera_names': task_config['train_camera_names'] if 'train_camera_names' in task_config else camera_names,
@@ -78,7 +79,7 @@ def main(args):
         dec_layers = 7
         nheads = 8
         policy_config = {'lr': args['lr'],
-                         'weight_decay': args['weight_decay'] if 'weight_decay' in args else 0.01,
+                         'weight_decay': args['weight_decay'] if 'weight_decay' in args else 1e-4,
                          'betas': args['betas'] if 'betas' in args else (0.9, 0.999),
                          'lr_scheduler': args['lr_scheduler'] if 'lr_scheduler'in args else None,
                          'freeze_backbone': args['frozen_enc'] if 'frozen_enc' in args else True,
@@ -118,17 +119,22 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'stepwisel1': args['stepwisel1'] if 'stepwisel1' in args else False,
     }
+
+    # args.pop('stepwisel1', None)
+    # if 'stepwisel1' in args.keys():
+    #     print('stepwisel1 exist')
+    # else:
+    #     print('stepwisel1 not exist')
 
     if is_eval:
         # ckpt_names = []
         # for file in os.listdir(ckpt_dir):
         #     if file.endswith('.ckpt'):
         #         ckpt_names.append(file)
-        ckpt_names = ['policy_epoch_1800_seed_0.ckpt', 'policy_last.ckpt',
-                      'policy_epoch_1700_seed_0.ckpt', 'policy_epoch_1600_seed_0.ckpt',
-                      # 'policy_last.ckpt'
+        ckpt_names = ['policy_best.ckpt'
                      ]  # , 'policy_last.ckpt', 'policy_best.ckpt'
                     
         results = []
@@ -161,18 +167,17 @@ def main(args):
         pickle.dump(stats, f)
 
     # ckpt = '10_30_result/policy_epoch_100_seed_0.ckpt'
-    # if is_eval and (args['ckpt'] is not None):
-    #     print('Use ckpt for evaluation: ', args['ckpt'])
-    #     finetune_ckpt = args['ckpt']
-    # else:
-    #     finetune_ckpt = None
-    finetune_ckpt = None
+    if args['ckpt'] is not None:
+        print('Use pretrained ckpt: ', args['ckpt'])
+        finetune_ckpt = os.path.join(ckpt_dir, args['ckpt'])
+    else:
+        finetune_ckpt = None
+    # finetune_ckpt = None
     # save cfg to ckpt_dir
     save_path = os.path.join(ckpt_dir, 'config.json') if not ('trial' in args) else os.path.join(ckpt_dir, f'config_trial_{args["trial"]}.json')
     print('config save path: ', save_path)
     with open(save_path, 'w') as f:
         json.dump(config, f, indent=4)
-    print(f'save best ckpt to ', args['model_path'])
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config, ckpt_path=finetune_ckpt)
     best_epoch, min_val_loss, mean_val_loss, best_state_dict = best_ckpt_info
 
@@ -264,6 +269,10 @@ def eval_bc(config, ckpt_name, save_episode=True):
     if temporal_agg:
         query_frequency = 1
         num_queries = policy_config['num_queries']
+    # print('query frequency: ', query_frequency)
+    # print('temporal agg: ', temporal_agg)
+    # query_frequency = int(query_frequency // 2)
+    query_frequency = 35
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
@@ -319,6 +328,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
                         all_actions = policy(qpos, curr_image)
+                        # print('output act shape: ', all_actions.shape)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -443,7 +453,14 @@ def train_bc(train_dataloader, val_dataloader, config, ckpt_path=None):
         print(f'Val loss:   {total_val_loss:.5f}')
         summary_string = ''
         for k, v in epoch_summary.items():
-            summary_string += f'{k}: {v.item():.3f} '
+            if k == 'stepwise_l1':
+                continue
+                # if config['stepwisel1']:
+                #     summary_string += f"{k}: [" + ", ".join(f"{x.item():.3f}" if isinstance(x, torch.Tensor) else f"{x:.3f}" for x in v) + "] "
+                # else:
+                #     continue
+            else:
+                summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
 
         # training
@@ -466,10 +483,31 @@ def train_bc(train_dataloader, val_dataloader, config, ckpt_path=None):
         print(f'Train loss: {epoch_train_loss:.5f}')
         summary_string = ''
         for k, v in epoch_summary.items():
-            summary_string += f'{k}: {v.item():.3f} '
+            if k == 'stepwise_l1':
+                continue
+                # if config['stepwisel1']:
+                #     summary_string += f"{k}: [" + ", ".join(f"{x.item():.3f}" if isinstance(x, torch.Tensor) else f"{x:.3f}" for x in v) + "] "
+                # else:
+                #     continue
+            else:
+                summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
 
-        if epoch % 50 == 0:
+        if epoch % 100 == 0:
+            avg_result = 'AVG Result:'
+            epoch_summary = compute_dict_mean(validation_history)
+
+            for k, v in epoch_summary.items():
+                if k == 'stepwise_l1':
+                    if config['stepwisel1']:
+                        avg_result += f"{k}: [" + ", ".join(f"{x.item():.3f}" if isinstance(x, torch.Tensor) else f"{x:.3f}" for x in v) + "] "
+                    else:
+                        continue
+                else:
+                    avg_result += f'{k}: {v.item():.3f} '
+            print(avg_result)
+
+        if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             torch.save(policy.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed, trial=config['trial'])
@@ -491,6 +529,8 @@ def train_bc(train_dataloader, val_dataloader, config, ckpt_path=None):
 def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed, trial=None):
     # save training curves
     for key in train_history[0]:
+        if key == 'stepwise_l1':
+            continue
         if trial is not None:
             plot_path = os.path.join(ckpt_dir, f'train_val_{key}_trial_{trial}_seed_{seed}.png')
         else:
@@ -531,5 +571,9 @@ if __name__ == '__main__':
     # parser.add_argument('--ckpt_name', action='store', type=str, help='ckpt_name', required=False)
 
     parser.add_argument('--temporal_agg', action='store_true')
+    parser.add_argument('--stepwisel1', action='store_true')
+
+    # parser.add_argument('--loadckpt', action='store', type=str, help='train from pretrained policy ckpt', default=None)
+
     
     main(vars(parser.parse_args()))

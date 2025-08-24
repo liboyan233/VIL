@@ -1,6 +1,8 @@
 import torch.nn as nn
+import torch
 from torch.nn import functional as F
 import torchvision.transforms as transforms
+import numpy as np
 
 from detr.main import build_ACT_model_and_optimizer, build_CNNMLP_model_and_optimizer
 import IPython
@@ -22,17 +24,30 @@ class ACTPolicy(nn.Module):
                                          std=[0.229, 0.224, 0.225])
         image = normalize(image)
         if actions is not None: # training time
-            actions = actions[:, :self.model.num_queries]
+            actions = actions[:, :self.model.num_queries]  # B, T, D
             is_pad = is_pad[:, :self.model.num_queries]
 
             a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+            # average on other dims and ignore the impact of padding
+            # print('shape ', all_l1.shape, is_pad.shape)
+            stepwise_l1 = all_l1.mean(-1)  # B, T
+
+            stepwise_l1 = [(stepwise_l1[:, i]*(~is_pad[:, i])).sum() / (~is_pad[:, i]).sum() for i in range(stepwise_l1.shape[1])]
+            stepwise_l1 = torch.tensor(stepwise_l1)  # T
+            # print('shape check: ', stepwise_l1.shape, is_pad.shape)
+
+            # stepwise_l1 = all_l1 * ~is_pad.unsqueeze(-1)   # B, T, N
+            # stepwise_l1 = stepwise_l1.mean(-1)
+            # stepwise_l1 = stepwise_l1.mean(0)  # T
+
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
             loss_dict['l1'] = l1
             loss_dict['kl'] = total_kld[0]
             loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
+            loss_dict['stepwise_l1'] = stepwise_l1
             return loss_dict
         else: # inference time
             a_hat, _, (_, _) = self.model(qpos, image, env_state) # no action, sample from prior

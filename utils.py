@@ -5,6 +5,7 @@ import h5py
 from torch.utils.data import TensorDataset, DataLoader
 from warnings import warn
 import IPython
+import time
 e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
@@ -126,8 +127,8 @@ def load_data(dataset_dir, num_episodes, camera_cfg, batch_size_train, batch_siz
 
     train_dataset = EpisodicDataset(train_indices, dataset_dir, train_cams, norm_stats)
     val_dataset = EpisodicDataset(val_indices, dataset_dir, val_cams, norm_stats)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=0) #, prefetch_factor=1)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=0) #, prefetch_factor=1)
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim
 
@@ -174,17 +175,37 @@ def sample_insertion_pose():
 
 def compute_dict_mean(epoch_dicts):
     result = {k: None for k in epoch_dicts[0]}
+        
     num_items = len(epoch_dicts)
     for k in result:
+        if k == 'stepwise_l1':
+            value_sum = np.zeros_like(epoch_dicts[0][k])
+            valid_count = np.zeros_like(epoch_dicts[0][k])
+            for epoch_dict in epoch_dicts:
+                try:
+                    step_error = epoch_dict[k].detach().cpu().numpy() 
+                except:
+                    step_error = epoch_dict[k]
+                value_sum += step_error # T
+                # print('value_sum', value_sum)
+                # print('test', step_error!=0)
+                valid_count += abs(step_error) > 1e-5
+                # print('value count ', valid_count)
+            result[k] = value_sum / valid_count
+            continue
+
         value_sum = 0
         for epoch_dict in epoch_dicts:
             value_sum += epoch_dict[k]
         result[k] = value_sum / num_items
     return result
 
+
 def detach_dict(d):
     new_d = dict()
     for k, v in d.items():
+        if k == 'stepwise_l1':
+            new_d[k] = v.detach().cpu().numpy()
         new_d[k] = v.detach()
     return new_d
 

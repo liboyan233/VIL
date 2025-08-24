@@ -21,7 +21,7 @@ def objective(trial):
     # 🧪 超参数采样
     trial_update = {
         'lr': trial.suggest_float('lr', 3e-6, 5e-4, log=True),
-        'weight_decay': trial.suggest_float('weight_decay', 1e-4, 1e-1, log=True),
+        'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
         'betas': trial.suggest_categorical('betas', [(0.9, 0.999), (0.9, 0.98)]),
         'lr_scheduler': trial.suggest_categorical('lr_scheduler', ['cosine', 'None']),
         'frozen_enc': trial.suggest_categorical('frozen_enc', [True, False]),

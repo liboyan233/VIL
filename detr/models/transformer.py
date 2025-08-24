@@ -13,7 +13,7 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-
+from .visualize_attn import visualize_attn_mask
 import IPython
 e = IPython.embed
 
@@ -120,13 +120,25 @@ class TransformerDecoder(nn.Module):
         output = tgt
 
         intermediate = []
+        vis_weights = []
+        weights_req = False
 
         for layer in self.layers:
-            output = layer(output, memory, tgt_mask=tgt_mask,
-                           memory_mask=memory_mask,
-                           tgt_key_padding_mask=tgt_key_padding_mask,
-                           memory_key_padding_mask=memory_key_padding_mask,
-                           pos=pos, query_pos=query_pos)
+            #### visualize attention weights ####
+            if weights_req:
+                output, attn_weights = layer(output, memory, tgt_mask=tgt_mask,
+                                            memory_mask=memory_mask,
+                                            tgt_key_padding_mask=tgt_key_padding_mask,
+                                            memory_key_padding_mask=memory_key_padding_mask,
+                                            pos=pos, query_pos=query_pos,
+                                            weights_req=weights_req)
+                vis_weights.append(attn_weights)
+            else:
+                output = layer(output, memory, tgt_mask=tgt_mask,
+                               memory_mask=memory_mask,
+                               tgt_key_padding_mask=tgt_key_padding_mask,
+                               memory_key_padding_mask=memory_key_padding_mask,
+                               pos=pos, query_pos=query_pos)    
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
 
@@ -135,6 +147,10 @@ class TransformerDecoder(nn.Module):
             if self.return_intermediate:
                 intermediate.pop()
                 intermediate.append(output)
+        if weights_req:
+            for i in range(len(vis_weights)):
+                visualize_attn_mask(vis_weights[i], i)
+            input('== wait for input to continue ==')
 
         if self.return_intermediate:
             return torch.stack(intermediate)
@@ -233,21 +249,32 @@ class TransformerDecoderLayer(nn.Module):
                      tgt_key_padding_mask: Optional[Tensor] = None,
                      memory_key_padding_mask: Optional[Tensor] = None,
                      pos: Optional[Tensor] = None,
-                     query_pos: Optional[Tensor] = None):
+                     query_pos: Optional[Tensor] = None,
+                     weights_req: Optional[bool] = False):
         q = k = self.with_pos_embed(tgt, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
                               key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
-                                   key=self.with_pos_embed(memory, pos),
-                                   value=memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+
+        if weights_req:
+            tgt2, attn_weights = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
+                                                     key=self.with_pos_embed(memory, pos),
+                                                     value=memory, attn_mask=memory_mask,
+                                                     need_weights=weights_req,
+                                                     key_padding_mask=memory_key_padding_mask)
+        else:
+            tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
+                                        key=self.with_pos_embed(memory, pos),
+                                        value=memory, attn_mask=memory_mask,
+                                        key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)
+        if weights_req:
+            return tgt, attn_weights
         return tgt
 
     def forward_pre(self, tgt, memory,
@@ -256,21 +283,31 @@ class TransformerDecoderLayer(nn.Module):
                     tgt_key_padding_mask: Optional[Tensor] = None,
                     memory_key_padding_mask: Optional[Tensor] = None,
                     pos: Optional[Tensor] = None,
-                    query_pos: Optional[Tensor] = None):
+                    query_pos: Optional[Tensor] = None,
+                    weights_req: Optional[bool] = False):
         tgt2 = self.norm1(tgt)
         q = k = self.with_pos_embed(tgt2, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
                               key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt2 = self.norm2(tgt)
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
-                                   key=self.with_pos_embed(memory, pos),
-                                   value=memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+        if weights_req:
+            tgt2, attn_weights = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
+                                                     key=self.with_pos_embed(memory, pos),
+                                                     value=memory, attn_mask=memory_mask,
+                                                     need_weights=weights_req,
+                                                     key_padding_mask=memory_key_padding_mask)
+        else:
+            tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
+                                    key=self.with_pos_embed(memory, pos),
+                                    value=memory, attn_mask=memory_mask,
+                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt2 = self.norm3(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
         tgt = tgt + self.dropout3(tgt2)
+        if weights_req:
+            return tgt, attn_weights
         return tgt
 
     def forward(self, tgt, memory,
@@ -279,12 +316,14 @@ class TransformerDecoderLayer(nn.Module):
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                query_pos: Optional[Tensor] = None,
+                weights_req: Optional[bool] = False
+                ):
         if self.normalize_before:
             return self.forward_pre(tgt, memory, tgt_mask, memory_mask,
-                                    tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                    tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, weights_req)
         return self.forward_post(tgt, memory, tgt_mask, memory_mask,
-                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, weights_req)
 
 
 def _get_clones(module, N):

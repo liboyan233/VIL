@@ -4,12 +4,12 @@ import pathlib
 DATA_DIR = '/home/data/liboyan/dataset/act'
 SIM_TASK_CONFIGS = {
     'sim_transfer_cube_scripted':{
-        'dataset_dir': DATA_DIR + '/sim_transfer_cube_scripted',
-        'num_episodes': 45,
+        'dataset_dir': DATA_DIR + '/sim_transfer_cube_wrist',
+        'num_episodes': 50,
         'episode_len': 400,
-        'camera_names': ['top', 'left', 'right'],
-        'train_camera_names': ['top', 'left'], # 'top', 'left'
-        'test_camera_names': ['top', 'left'] # 'top', 'right'
+        'camera_names': ['top', 'left', 'right', 'wrist'],
+        'train_camera_names': ['wrist', 'left'], # 'top', 'wrist', 'left'
+        'test_camera_names': ['wrist', 'top'] # 'top', 'wrist', 'right'
     },
 
     'sim_transfer_cube_human':{
@@ -20,10 +20,12 @@ SIM_TASK_CONFIGS = {
     },
 
     'sim_insertion_scripted': {
-        'dataset_dir': DATA_DIR + '/sim_insertion_scripted',
+        'dataset_dir': DATA_DIR + '/sim_insertion_2wrist',
         'num_episodes': 50,
-        'episode_len': 400,
-        'camera_names': ['top', 'left', 'right']
+        'episode_len': 700,  # 400
+        'camera_names': ['top', 'left', 'right', 'wrist', 'wrist2'],
+        'train_camera_names': ['wrist', 'wrist2', 'left'], # 'top', 'left'
+        'test_camera_names': ['wrist', 'wrist2', 'right'] # 'top', 'right'
     },
 
     'sim_insertion_human': {

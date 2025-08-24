@@ -9,6 +9,10 @@ from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
 
 import numpy as np
+import copy
+
+import sys
+import traceback
 
 import IPython
 e = IPython.embed
@@ -29,6 +33,35 @@ def get_sinusoid_encoding_table(n_position, d_hid):
     sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
 
     return torch.FloatTensor(sinusoid_table).unsqueeze(0)
+
+class FiLM(nn.Module):
+    def __init__(self, input_dim, num_features):
+        super(FiLM, self).__init__()
+        self.gamma_ = nn.Linear(input_dim, num_features)
+        self.beta_ = nn.Linear(input_dim, num_features)
+    
+    def forward(self, x, cond):
+        if type(cond) == list and len(cond) > 1:
+            # cond = [cond1, cond2, ...]
+            conds = []
+            for i in range(len(cond)):  # input be list of B,C,H,W
+                if i == 0:
+                    cond_temp = cond[i].amax(dim=(2,3))  # 
+                    conds.append(cond_temp)
+                else:
+                    cond_temp = cond[i].mean(dim=(2,3))
+                    conds.append(cond_temp)
+            cond = torch.cat(conds, dim=1)
+        else:
+            raise NotImplementedError
+        
+        gamma = self.gamma_(cond)
+        beta = self.beta_(cond)
+        gamma = gamma.view(gamma.size(0), gamma.size(1), 1, 1)
+        beta = beta.view(beta.size(0), beta.size(1), 1, 1)
+        x = x * gamma + beta
+
+        return x
 
 
 class DETRVAE(nn.Module):
@@ -54,9 +87,12 @@ class DETRVAE(nn.Module):
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         if backbones is not None:
-            print('Dim: ', backbones[0].num_channels, hidden_dim)
+            
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
+            for bb in self.backbones:
+                print('Dim: ', bb.num_channels, hidden_dim)
+                print('Backbone type: ', type(bb[0].body).__name__)
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
@@ -68,7 +104,7 @@ class DETRVAE(nn.Module):
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        print('state_dim: ', state_dim)
+        # print('state_dim: ', state_dim)
         self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
         self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
@@ -77,6 +113,18 @@ class DETRVAE(nn.Module):
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
+        # self.film = FiLM(hidden_dim*len(backbones), hidden_dim) # FiLM layer for each camera
+
+        # encoder dimension adapter        
+        # dim_list = [bb.num_channels for bb in backbones]
+        # dim_record = max(dim_list)
+        # adapter = nn.ModuleList()
+        # for i in range(len(backbones)):
+        #     if dim_list[i] != dim_record:
+        #         adapter.append(nn.Conv2d(dim_list[i], dim_record, kernel_size=1))
+        #     else:
+        #         adapter.append(None)
+
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None):
         """
@@ -123,7 +171,18 @@ class DETRVAE(nn.Module):
             all_cam_features = []
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
-                features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
+                try:
+                    features, pos = self.backbones[cam_id](image[:, cam_id]) # HARDCODED
+                except Exception as e:
+                    # Get the full error traceback
+                    error_type, error_value, error_traceback = sys.exc_info()
+                    error_traceback_str = traceback.format_exc()  # Full error message + line numbers
+                    
+                    print(f"Error occurred: {error_type.__name__}: {error_value}")
+                    print(f"Traceback:\n{error_traceback_str}")
+                    
+                    features, pos = self.backbones[0](image[:, cam_id])
+                    print('Using same backbone for all cameras')
 
                 features = features[0] # take the last layer feature -> N, C, H*, W*
                 pos = pos[0]
@@ -132,8 +191,15 @@ class DETRVAE(nn.Module):
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos)
             # fold camera dimension into width dimension
-            src = torch.cat(all_cam_features, axis=3)
+
+            # FilM layer
+            # src = self.film(all_cam_features[0], all_cam_features)
+            # pos = all_cam_pos[0]
+
+            # TODO -- why cat at dimension 3??
+            src = torch.cat(all_cam_features, axis=3) # B, C, H', W* -> B, C, H, W * num_cam
             pos = torch.cat(all_cam_pos, axis=3)
+
             hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
         else:
             qpos = self.input_proj_robot_state(qpos)
@@ -143,7 +209,6 @@ class DETRVAE(nn.Module):
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
-
 
         return a_hat, is_pad_hat, [mu, logvar]
 
@@ -242,8 +307,20 @@ def build(args):
     # backbone = None # from state for now, no need for conv nets
     # From image
     backbones = []
-    backbone = build_backbone(args)  # --> resnet18
-    backbones.append(backbone)
+    if type(args.backbone) is list:
+        train_camera_names = args.camera_config['train_camera_names']
+        print("Using multiple backbones, make sure the backbone list is in the same order as camera names")
+        assert len(args.backbone) == len(train_camera_names), "backbone list length must match camera names"
+        for backbone_name in args.backbone:
+            args_override = copy.deepcopy(args)
+            args_override.backbone = backbone_name
+            print('Backbone: ', args_override.backbone)
+            backbone = build_backbone(args_override)
+            backbones.append(backbone)
+    else:
+        print('Using same backbone for all cameras')
+        backbone = build_backbone(args)
+        backbones.append(backbone)
 
     transformer = build_transformer(args)
 
