@@ -71,12 +71,11 @@ class BackboneBase(nn.Module):
         #         parameter.requires_grad_(False)
         self.swin = False
         self.vit = False
-        print("Backbone:", backbone.__class__.__name__)
+        print("Detailed Backbone Name:", backbone.__class__.__name__)
         if backbone.__class__.__name__ == 'SwinTransformer':
             return_layers = {"features": "0"}
             self.swin = True
         elif backbone.__class__.__name__ == 'VisionTransformer' or backbone.__class__.__name__ == 'DinoVisionTransformer':
-            print("this is a ViT backbone")
             # backbone.heads = torch.nn.Identity()  # remove classification head
             return_layers = None
             self.vit = True
@@ -155,14 +154,10 @@ class Backbone(BackboneBase):
                  freeze_backbone: Optional[bool] = False):
 
         num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        if name == 'swin_tiny':
-            num_channels = 784
             # print("=== Swin Transformer Tiny Backbone ===")
-        elif name == 'vit':
-            num_channels = 384
-            # print("=== ViT Backbone ===")
 
         if name == 'swin_tiny':
+            num_channels = 512
             warn("=== Using Swin Transformer Tiny Backbone ===")
             if swin_local_ckpt == "default":
                 warn("=== Loading default checkpoint ===")
@@ -185,6 +180,7 @@ class Backbone(BackboneBase):
             else:
                 warn("=== Updating backbone parameters ===")
         elif 'vit' in name:
+            num_channels = 512
             warn("=== Using ViT Backbone ===")
             backbone = torch.hub.load('facebookresearch/dinov2:main', 'dinov2_vits14')
             # backbone = getattr(torchvision.models, name)(weights='DEFAULT')
@@ -232,12 +228,10 @@ class Joiner(nn.Sequential):
         try:  # 
             for name, x in xs.items():
                 out.append(x)  # x shape: [N, C, H, W]
-                print('backbone output shape:', x.shape, 'with backbone', self[0].body.__class__.__name__)
                 # position encoding
                 pos.append(self[1](x).to(x.dtype))
         except:
             out.append(xs)  # should also be in shape [N, C, H, W]
-            print('backbone output shape1:', xs.shape)
 
             pos.append(self[1](xs).to(xs.dtype))
         return out, pos

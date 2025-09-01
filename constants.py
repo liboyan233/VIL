@@ -24,8 +24,8 @@ SIM_TASK_CONFIGS = {
         'num_episodes': 50,
         'episode_len': 700,  # 400
         'camera_names': ['top', 'left', 'right', 'wrist', 'wrist2'],
-        'train_camera_names': ['wrist', 'wrist2', 'left'], # 'top', 'left'
-        'test_camera_names': ['wrist', 'wrist2', 'right'] # 'top', 'right'
+        'train_camera_names': ['wrist', 'wrist2'], # 'top', 'left'
+        'test_camera_names': ['wrist', 'wrist2'] # 'top', 'right'
     },
 
     'sim_insertion_human': {

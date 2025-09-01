@@ -35,6 +35,7 @@ def custom_showwarning(message, category, filename, lineno, file=None, line=None
     print(f"{Fore.YELLOW}Warning:{Style.RESET_ALL} {message} ({filename}:{lineno})")
 warnings.showwarning = custom_showwarning
 
+
 def main(args):
     set_seed(1)
     # command line parameters
@@ -97,13 +98,7 @@ def main(args):
                          'camera_config': camera_config,
                          'state_dim': state_dim,
                          }
-        
-
-    elif policy_class == 'CNNMLP':
-        policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 
-                         'backbone' : backbone, 'num_queries': 1, 'camera_names': camera_names,}
-    else:
-        raise NotImplementedError
+    
     
     # print('=============== trial:', args['trial'], '===============')
     config = {
@@ -147,50 +142,7 @@ def main(args):
         print()
         exit()
 
-
-    if 'roboset' in task_name:
-        if 'vit' in backbone:
-            # resize to 224x224
-            transform = transforms.Resize((224, 224))
-        else:
-            transform = None
-        train_dataloader, val_dataloader, stats = load_data_online(dataset_dir, batch_size_train, batch_size_val, transform=transform)
-        print('Loading RoboSet data')
-    else:
-        train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_config, batch_size_train, batch_size_val)
-
-    # save dataset stats
-    if not os.path.isdir(ckpt_dir):
-        os.makedirs(ckpt_dir)
-    stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
-    with open(stats_path, 'wb') as f:
-        pickle.dump(stats, f)
-
-    # ckpt = '10_30_result/policy_epoch_100_seed_0.ckpt'
-    if args['ckpt'] is not None:
-        print('Use pretrained ckpt: ', args['ckpt'])
-        finetune_ckpt = os.path.join(ckpt_dir, args['ckpt'])
-    else:
-        finetune_ckpt = None
-    # finetune_ckpt = None
-    # save cfg to ckpt_dir
-    save_path = os.path.join(ckpt_dir, 'config.json') if not ('trial' in args) else os.path.join(ckpt_dir, f'config_trial_{args["trial"]}.json')
-    print('config save path: ', save_path)
-    with open(save_path, 'w') as f:
-        json.dump(config, f, indent=4)
-    best_ckpt_info = train_bc(train_dataloader, val_dataloader, config, ckpt_path=finetune_ckpt)
-    best_epoch, min_val_loss, mean_val_loss, best_state_dict = best_ckpt_info
-
-    # save best checkpoint
-    if 'model_path' in args:
-        ckpt_path = args['model_path']
-    else:
-        ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
-    torch.save(best_state_dict, ckpt_path)
-    print(f'Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}')
-    print(f'Mean val loss {mean_val_loss:.6f} @ epoch{best_epoch}')
-
-    return mean_val_loss
+    return 
 
 
 def make_policy(policy_class, policy_config):
@@ -400,153 +352,6 @@ def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
-
-def train_bc(train_dataloader, val_dataloader, config, ckpt_path=None):
-    num_epochs = config['num_epochs']
-    ckpt_dir = config['ckpt_dir']
-    seed = config['seed']
-    policy_class = config['policy_class']
-    policy_config = config['policy_config']
-
-    set_seed(seed)
-
-    policy = make_policy(policy_class, policy_config)
-
-    print('----- Validate settings -----')
-    print('lr:', config['lr'])
-    print('lr_scheduler:', policy.lr_scheduler)
-    print('weight_decay:', policy.optimizer.param_groups[0]['weight_decay'])
-
-    if ckpt_path is not None:
-        loading_status = policy.load_state_dict(torch.load(ckpt_path))
-        print('Loading ckpt from ', ckpt_path)
-        print('Loading status: ', loading_status)
-
-    policy.cuda()
-    optimizer = make_optimizer(policy_class, policy)
-
-    train_history = []
-    validation_history = []
-    min_val_loss = np.inf
-    best_ckpt_info = None
-    for epoch in tqdm(range(num_epochs)):
-        print(f'\nEpoch {epoch}')
-        # validation
-        with torch.inference_mode():
-            policy.eval()
-            epoch_dicts = []
-            for batch_idx, data in enumerate(val_dataloader):
-                forward_dict = forward_pass(data, policy)
-                epoch_dicts.append(forward_dict)
-            epoch_summary = compute_dict_mean(epoch_dicts)
-            validation_history.append(epoch_summary)
-
-            epoch_val_loss = epoch_summary['loss']
-            if epoch_val_loss < min_val_loss:
-                min_val_loss = epoch_val_loss
-
-                val_loss_list = [val['loss'].detach().cpu() for val in validation_history[len(validation_history)-30:len(validation_history)]]
-                mean_val_loss = np.mean(val_loss_list)
-                
-                best_ckpt_info = (epoch, min_val_loss, mean_val_loss, deepcopy(policy.state_dict()))
-        total_val_loss = epoch_summary['loss']
-        print(f'Val loss:   {total_val_loss:.5f}')
-        summary_string = ''
-        for k, v in epoch_summary.items():
-            if k == 'stepwise_l1':
-                continue
-                # if config['stepwisel1']:
-                #     summary_string += f"{k}: [" + ", ".join(f"{x.item():.3f}" if isinstance(x, torch.Tensor) else f"{x:.3f}" for x in v) + "] "
-                # else:
-                #     continue
-            else:
-                summary_string += f'{k}: {v.item():.3f} '
-        print(summary_string)
-
-        # training
-        policy.train()
-        optimizer.zero_grad()
-        for batch_idx, data in enumerate(train_dataloader):
-            forward_dict = forward_pass(data, policy)
-            # backward
-            loss = forward_dict['loss']
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            train_history.append(detach_dict(forward_dict))
-            if policy.lr_scheduler is not None:
-                policy.lr_scheduler.step()
-            
-        epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
-        # print('check ', len(train_history), (batch_idx+1)*epoch, (batch_idx+1)*(epoch+1))
-        epoch_train_loss = epoch_summary['loss']
-        print(f'Train loss: {epoch_train_loss:.5f}')
-        summary_string = ''
-        for k, v in epoch_summary.items():
-            if k == 'stepwise_l1':
-                continue
-                # if config['stepwisel1']:
-                #     summary_string += f"{k}: [" + ", ".join(f"{x.item():.3f}" if isinstance(x, torch.Tensor) else f"{x:.3f}" for x in v) + "] "
-                # else:
-                #     continue
-            else:
-                summary_string += f'{k}: {v.item():.3f} '
-        print(summary_string)
-
-        if epoch % 100 == 0:
-            avg_result = 'AVG Result:'
-            epoch_summary = compute_dict_mean(validation_history)
-
-            for k, v in epoch_summary.items():
-                if k == 'stepwise_l1':
-                    if config['stepwisel1']:
-                        avg_result += f"{k}: [" + ", ".join(f"{x.item():.3f}" if isinstance(x, torch.Tensor) else f"{x:.3f}" for x in v) + "] "
-                    else:
-                        continue
-                else:
-                    avg_result += f'{k}: {v.item():.3f} '
-            print(avg_result)
-
-        if epoch % 100 == 0:
-            ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
-            torch.save(policy.state_dict(), ckpt_path)
-            plot_history(train_history, validation_history, epoch, ckpt_dir, seed, trial=config['trial'])
-
-    ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
-    torch.save(policy.state_dict(), ckpt_path)
-
-    best_epoch, min_val_loss, _, best_state_dict = best_ckpt_info
-    ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{best_epoch}_seed_{seed}.ckpt')
-    torch.save(best_state_dict, ckpt_path)
-    print(f'Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at epoch {best_epoch}')
-
-    # save training curves
-    plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed, trial=config['trial'])
-
-    return best_ckpt_info
-
-
-def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed, trial=None):
-    # save training curves
-    for key in train_history[0]:
-        if key == 'stepwise_l1':
-            continue
-        if trial is not None:
-            plot_path = os.path.join(ckpt_dir, f'train_val_{key}_trial_{trial}_seed_{seed}.png')
-        else:
-            plot_path = os.path.join(ckpt_dir, f'train_val_{key}_seed_{seed}.png')
-        plt.figure()
-        train_values = [summary[key].item() for summary in train_history]
-        val_values = [summary[key].item() for summary in validation_history]
-        plt.plot(np.linspace(0, num_epochs-1, len(train_history)), train_values, label='train')
-        plt.plot(np.linspace(0, num_epochs-1, len(validation_history)), val_values, label='validation')
-        # plt.ylim([-0.1, 1])
-        plt.tight_layout()
-        plt.legend()
-        plt.title(key)
-        plt.savefig(plot_path)
-        plt.close()
-    print(f'Saved plots to {ckpt_dir}')
 
 
 if __name__ == '__main__':

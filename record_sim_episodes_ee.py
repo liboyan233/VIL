@@ -72,7 +72,10 @@ def main(args):
         else:
             print(f"{episode_idx=} Failed")
 
-        joint_traj = [ts.observation['qpos'] for ts in episode]
+        # joint_traj = [ts.observation['qpos'] for ts in episode]
+        ee_traj_left = [ts.observation['mocap_pose_left'] for ts in episode]
+        ee_traj_right = 
+        print(np.array(ee_traj).shape, np.array(joint_traj).shape)
         # replace gripper pose with gripper control
         gripper_ctrl_traj = [ts.observation['gripper_ctrl'] for ts in episode]
         for joint, ctrl in zip(joint_traj, gripper_ctrl_traj):

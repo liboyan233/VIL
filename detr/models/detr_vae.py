@@ -88,11 +88,12 @@ class DETRVAE(nn.Module):
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         if backbones is not None:
             
-            self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
+            # self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
+            self.input_proj = nn.Conv2d(512, hidden_dim, kernel_size=1)  # HARDCODED, HACK
             self.backbones = nn.ModuleList(backbones)
-            for bb in self.backbones:
-                print('Dim: ', bb.num_channels, hidden_dim)
-                print('Backbone type: ', type(bb[0].body).__name__)
+            # for bb in self.backbones:
+            #     print('Dim: ', bb.num_channels, hidden_dim)
+            #     print('Backbone type: ', type(bb[0].body).__name__)
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
