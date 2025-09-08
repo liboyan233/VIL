@@ -145,4 +145,3 @@ dmypy.json
 /diffusion_policy
 # test file
 test*.py
-*.png 
