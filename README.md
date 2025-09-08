@@ -1,6 +1,6 @@
 # Zero-Shot View-Invariant Imitation Learning: Bridging Handheld Gripper and Any Exocentric View
 ![Architecture Diagram](sources/overall.png "System Overview")
-#### Description: 
+### Description: 
 This repo contains the implementation of VIL, Zero-Shot View-Invariant Imitation Learning framework.
 A large part of codes are adopted from ACT algorithm. We would like to thank the authors of ACT for their well-organized project!
 In this repo, you can run VIL in simulation environments such as Transfer Cube and Bimanual Insertion for training and evaluation. You can also test the effect of different encoder backbone and SOTA methods like DP. 
