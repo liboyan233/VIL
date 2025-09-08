@@ -142,7 +142,7 @@ dmypy.json
 # ckpt
 /ckpt
 /ckpt_test
-
+/diffusion_policy
 # test file
 test*.py
 *.png 

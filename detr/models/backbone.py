@@ -71,6 +71,7 @@ class BackboneBase(nn.Module):
         #         parameter.requires_grad_(False)
         self.swin = False
         self.vit = False
+        self.resnet50 = False
         print("Detailed Backbone Name:", backbone.__class__.__name__)
         if backbone.__class__.__name__ == 'SwinTransformer':
             return_layers = {"features": "0"}
@@ -99,6 +100,9 @@ class BackboneBase(nn.Module):
                 nn.Conv2d(384, 512, kernel_size=3, stride=2, padding=1),  # Downsamples and projects
                 nn.ReLU()
             )
+        elif sum([len(backbone.layer1), len(backbone.layer2), len(backbone.layer3), len(backbone.layer4)]) == 16:  # resnet50
+            self.ada_feature = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
+            self.resnet50 = True
 
     def forward(self, tensor):
         try:
@@ -118,6 +122,9 @@ class BackboneBase(nn.Module):
             if self.swin:
                 for name, x in xs.items():
                     xs[name] = self.ada_feature(x.permute(0, 3, 1, 2))
+            elif self.resnet50:
+                for name, x in xs.items():
+                    xs[name] = self.ada_feature(x)
             # elif self.vit:
            
         return xs
@@ -153,7 +160,7 @@ class Backbone(BackboneBase):
                  swin_local_ckpt: Optional[str] = None,
                  freeze_backbone: Optional[bool] = False):
 
-        num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+        num_channels = 512 if name in ('resnet18', 'resnet34', 'resnet50') else 2048
             # print("=== Swin Transformer Tiny Backbone ===")
 
         if name == 'swin_tiny':

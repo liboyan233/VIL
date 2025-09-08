@@ -9,14 +9,7 @@ SIM_TASK_CONFIGS = {
         'episode_len': 400,
         'camera_names': ['top', 'left', 'right', 'wrist'],
         'train_camera_names': ['wrist', 'left'], # 'top', 'wrist', 'left'
-        'test_camera_names': ['wrist', 'top'] # 'top', 'wrist', 'right'
-    },
-
-    'sim_transfer_cube_human':{
-        'dataset_dir': DATA_DIR + '/sim_transfer_cube_human',
-        'num_episodes': 50,
-        'episode_len': 400,
-        'camera_names': ['top']
+        'test_camera_names': ['wrist', 'left'] # 'top', 'wrist', 'right'
     },
 
     'sim_insertion_scripted': {
@@ -24,19 +17,12 @@ SIM_TASK_CONFIGS = {
         'num_episodes': 50,
         'episode_len': 700,  # 400
         'camera_names': ['top', 'left', 'right', 'wrist', 'wrist2'],
-        'train_camera_names': ['wrist', 'wrist2'], # 'top', 'left'
-        'test_camera_names': ['wrist', 'wrist2'] # 'top', 'right'
-    },
-
-    'sim_insertion_human': {
-        'dataset_dir': DATA_DIR + '/sim_insertion_human',
-        'num_episodes': 50,
-        'episode_len': 500,
-        'camera_names': ['top']
+        'train_camera_names': ['wrist', 'wrist2', 'left'], # 'top', 'left'
+        'test_camera_names': ['wrist', 'wrist2', 'left'] # 'top', 'right'
     },
 
     'roboset_scene1': {
-        'dataset_dir': '/home/data/liboyan/dataset/RoboSet/source/baking_pick_bowl_scene_2/validation/',
+        'dataset_dir': '</path/to/roboset/scene1>',
         'num_episodes': None,
         'episode_len': 42,
         'camera_names': ['default1', 'default2'] # , 'default3'

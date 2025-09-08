@@ -27,6 +27,8 @@ import warnings
 from colorama import Fore, Style
 import IPython
 import time
+from diffusion import DiffusionPolicy
+import cv2
 CUDA_LAUNCH_BLOCKING=1
 e = IPython.embed
 # matplotlib.use('Agg') 
@@ -41,12 +43,10 @@ def main(args):
     # command line parameters
     is_eval = args['eval']
     ckpt_dir = args['ckpt_dir']
+    normalizer_path = args['normalizer_path']
     policy_class = args['policy_class']
     onscreen_render = args['onscreen_render']
     task_name = args['task_name']
-    batch_size_train = args['batch_size']
-    batch_size_val = args['batch_size']
-    num_epochs = args['num_epochs']
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -60,82 +60,38 @@ def main(args):
     else:
         from aloha_scripts.constants import TASK_CONFIGS
         task_config = TASK_CONFIGS[task_name]
-    dataset_dir = task_config['dataset_dir']
-    num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
 
     # fixed parameters
     state_dim = 14  # 8 for roboset, 14 for sim_transfer_cube
-    lr_backbone = 5e-6  # set to 0 if not fine-tuned
-    backbone = ['resnet18', 'resnet18'] # 'resnet18' or 'swin_tiny' or 'vit_b_16'
 
     camera_config = {
         'train_camera_names': task_config['train_camera_names'] if 'train_camera_names' in task_config else camera_names,
         'test_camera_names': task_config['test_camera_names'] if 'test_camera_names' in task_config else camera_names,
     }
 
-    if policy_class == 'ACT':
-        enc_layers = 4
-        dec_layers = 7
-        nheads = 8
-        policy_config = {'lr': args['lr'],
-                         'weight_decay': args['weight_decay'] if 'weight_decay' in args else 1e-4,
-                         'betas': args['betas'] if 'betas' in args else (0.9, 0.999),
-                         'lr_scheduler': args['lr_scheduler'] if 'lr_scheduler'in args else None,
-                         'freeze_backbone': args['frozen_enc'] if 'frozen_enc' in args else True,
-                         'swin_local_ckpt': args['swin_local_ckpt'] if 'swin_local_ckpt' in args else 'default',
-                         'num_queries': args['chunk_size'],
-                         'kl_weight': args['kl_weight'],
-                         'hidden_dim': args['hidden_dim'],
-                         'dim_feedforward': args['dim_feedforward'],
-                         'lr_backbone': lr_backbone,
-                         'backbone': backbone,
-                         'enc_layers': enc_layers,
-                         'dec_layers': dec_layers,
-                         'nheads': nheads,
-                         'camera_names': camera_names,
-                         'camera_config': camera_config,
-                         'state_dim': state_dim,
-                         }
-    
-    
     # print('=============== trial:', args['trial'], '===============')
     config = {
         'trial': args['trial'] if 'trial' in args else None,
-        'num_epochs': num_epochs,
         'ckpt_dir': ckpt_dir,
-        'episode_len': episode_len,
-        'lr': args['lr'],
+        'normalizer_path': normalizer_path,
+        'state_dim': state_dim,
+        'real_robot': not is_sim,
         'policy_class': policy_class,
         'onscreen_render': onscreen_render,
-        'policy_config': policy_config,
+        'episode_len': episode_len,
         'task_name': task_name,
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
-        'camera_names': camera_names,
-        'real_robot': not is_sim,
+        'camera_config': camera_config,
         'stepwisel1': args['stepwisel1'] if 'stepwisel1' in args else False,
     }
 
-    # args.pop('stepwisel1', None)
-    # if 'stepwisel1' in args.keys():
-    #     print('stepwisel1 exist')
-    # else:
-    #     print('stepwisel1 not exist')
-
     if is_eval:
-        # ckpt_names = []
-        # for file in os.listdir(ckpt_dir):
-        #     if file.endswith('.ckpt'):
-        #         ckpt_names.append(file)
-        ckpt_names = ['policy_best.ckpt'
-                     ]  # , 'policy_last.ckpt', 'policy_best.ckpt'
-                    
         results = []
-        for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
-            results.append([ckpt_name, success_rate, avg_return])
+        success_rate, avg_return = eval_bc(config, save_episode=True)
+        results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
             print(f'{ckpt_name}: {success_rate=} {avg_return=}')
@@ -145,45 +101,59 @@ def main(args):
     return 
 
 
-def make_policy(policy_class, policy_config):
-    if policy_class == 'ACT':
-        policy = ACTPolicy(policy_config)
-    elif policy_class == 'CNNMLP':
-        policy = CNNMLPPolicy(policy_config)
+def make_policy(policy_class, ckpt_path, normalizer_path):
+    if policy_class == 'DP':
+        policy = DiffusionPolicy(ckpt_path, normalizer_path)
     else:
         raise NotImplementedError
     return policy
 
+def get_image_transform(in_res, out_res, crop_ratio:float = 1.0, bgr_to_rgb: bool=False):
+    iw, ih = in_res
+    ow, oh = out_res
+    ch = round(ih * crop_ratio)
+    cw = round(ih * crop_ratio / oh * ow)
+    interp_method = cv2.INTER_AREA
 
-def make_optimizer(policy_class, policy):
-    if policy_class == 'ACT':
-        optimizer = policy.configure_optimizers()
-    elif policy_class == 'CNNMLP':
-        optimizer = policy.configure_optimizers()
-    else:
-        raise NotImplementedError
-    return optimizer
+    w_slice_start = (iw - cw) // 2
+    w_slice = slice(w_slice_start, w_slice_start + cw)
+    h_slice_start = (ih - ch) // 2
+    h_slice = slice(h_slice_start, h_slice_start + ch)
+    c_slice = slice(None)
+    if bgr_to_rgb:
+        c_slice = slice(None, None, -1)
 
+    def transform(img: np.ndarray):
+        assert img.shape == ((ih,iw,3))
+        # crop
+        img = img[h_slice, w_slice, c_slice]
+        # resize
+        img = cv2.resize(img, out_res, interpolation=interp_method)
+        return img
+    
+    return transform
 
 def get_image(ts, camera_names):
     curr_images = []
     for cam_name in camera_names:
-        curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+        curr_image = resize_tf(ts.observation['images'][cam_name])
+        curr_image = rearrange(curr_image, 'h w c -> c h w')
+        # curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
         curr_images.append(curr_image)
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
 
-def eval_bc(config, ckpt_name, save_episode=True):
+def eval_bc(config, save_episode=True):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
-    state_dim = config['policy_config']['state_dim']
+    normalizer_path = config['normalizer_path']
+    state_dim = config['state_dim']
     real_robot = config['real_robot']
     policy_class = config['policy_class']
     onscreen_render = config['onscreen_render']
-    policy_config = config['policy_config']
-    camera_names = config['policy_config']['camera_config']['test_camera_names']
+    camera_names = config['camera_config']['test_camera_names']
     max_timesteps = config['episode_len']
     task_name = config['task_name']
     temporal_agg = config['temporal_agg']
@@ -192,19 +162,10 @@ def eval_bc(config, ckpt_name, save_episode=True):
     warn(f"Camera used for eval: {camera_names}", )
 
     # load policy and stats
-    ckpt_path = os.path.join(ckpt_dir, ckpt_name)
-    policy = make_policy(policy_class, policy_config)
-    loading_status = policy.load_state_dict(torch.load(ckpt_path))
-    print(loading_status)
+    policy = make_policy(policy_class, ckpt_dir, normalizer_path)
     policy.cuda()
     policy.eval()
-    print(f'Loaded: {ckpt_path}')
-    stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
-    with open(stats_path, 'rb') as f:
-        stats = pickle.load(f)
-
-    pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
-    post_process = lambda a: a * stats['action_std'] + stats['action_mean']
+    print(f'Loaded: {ckpt_dir}')
 
     # load environment
     if real_robot:
@@ -217,14 +178,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         env = make_sim_env(task_name)
         env_max_reward = env.task.max_reward
 
-    query_frequency = policy_config['num_queries']
-    if temporal_agg:
-        query_frequency = 1
-        num_queries = policy_config['num_queries']
-    # print('query frequency: ', query_frequency)
-    # print('temporal agg: ', temporal_agg)
-    # query_frequency = int(query_frequency // 2)
-    query_frequency = 35
+    query_frequency = 48
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
@@ -232,6 +186,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
     episode_returns = []
     highest_rewards = []
     for rollout_id in range(num_rollouts):
+        print(f'================ Rollout {rollout_id} ================')
         rollout_id += 0
         ### set task
         if 'sim_transfer_cube' in task_name:
@@ -248,17 +203,21 @@ def eval_bc(config, ckpt_name, save_episode=True):
             plt.ion()
 
         ### evaluation loop
-        if temporal_agg:
-            all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
         image_list = [] # for visualization
         qpos_list = []
         target_qpos_list = []
         rewards = []
+
+        glab_flag2 = False
+        glab_threshold_open = 0.7
+        glab_threshold_close = 0.5
         with torch.inference_mode():
             for t in range(max_timesteps):
                 ### update onscreen render and wait for DT
+
+
                 if onscreen_render:
                     image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
                     plt_img.set_data(image)
@@ -271,40 +230,40 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 else:
                     image_list.append({'main': obs['image']})
                 qpos_numpy = np.array(obs['qpos'])
-                qpos = pre_process(qpos_numpy)
-                qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
+                qpos = torch.from_numpy(qpos_numpy).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
-                curr_image = get_image(ts, camera_names)
+                curr_image = get_image(ts, camera_names)  # N, C, H, W in [0, 1]
 
                 ### query policy
-                if config['policy_class'] == "ACT":
+                if config['policy_class'] == "DP":
                     if t % query_frequency == 0:
                         all_actions = policy(qpos, curr_image)
                         # print('output act shape: ', all_actions.shape)
                     if temporal_agg:
-                        all_time_actions[[t], t:t+num_queries] = all_actions
-                        actions_for_curr_step = all_time_actions[:, t]
-                        actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
-                        actions_for_curr_step = actions_for_curr_step[actions_populated]
-                        k = 0.01
-                        exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                        exp_weights = exp_weights / exp_weights.sum()
-                        exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
-                        raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                        pass
                     else:
-                        raw_action = all_actions[:, t % query_frequency]
-                elif config['policy_class'] == "CNNMLP":
-                    raw_action = policy(qpos, curr_image)
+                        # raw_action = all_actions[:, t % query_frequency]
+                        action_idx = (t % query_frequency) // 1  # 1 for downsample factor
+                        raw_action = all_actions[:, action_idx]
                 else:
                     raise NotImplementedError
 
                 ### post-process actions
-                raw_action = raw_action.squeeze(0).cpu().numpy()
-                action = post_process(raw_action)
-                target_qpos = action
+                # action = post_process(raw_action)
+                target_qpos = raw_action[0]
+                # print('target_qpos:', qpos[-1, -1])
+                if qpos[-1, -1] > glab_threshold_open:
+                    glab_flag2 = True
+
+                if glab_flag2 and qpos[-1, -1] < 0.2:
+                    glab_flag2 = False
+                
+                if glab_flag2 and qpos[-1, -1] < glab_threshold_close:
+                    # print(f'change from {target_qpos[-1]} to 0')
+                    target_qpos[-1] = 0
 
                 ### step the environment
-                ts = env.step(target_qpos)
+                ts = env.step(target_qpos)  # the desired input is of shape (14,)
 
                 ### for visualization
                 qpos_list.append(qpos_numpy)
@@ -312,9 +271,6 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 rewards.append(ts.reward)
 
             plt.close()
-        if real_robot:
-            move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
-            pass
 
         rewards = np.array(rewards)
         episode_return = np.sum(rewards[rewards!=None])
@@ -324,7 +280,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
 
         if save_episode:
-            save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
+            save_videos(image_list, DT, video_path=os.path.join('/home/admin128/Desktop/liboyan/Imitation_learning/act/ckpt_test', f'video{rollout_id}.mp4'))
 
     success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
     avg_return = np.mean(episode_returns)
@@ -337,8 +293,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
     print(summary_str)
 
     # save success rate to txt
-    result_file_name = 'result_' + ckpt_name.split('.')[0] + '.txt'
-    with open(os.path.join(ckpt_dir, result_file_name), 'w') as f:
+    result_file_name = 'result_' + '.txt'
+    with open(os.path.join('/home/admin128/Desktop/liboyan/Imitation_learning/act/ckpt_test', result_file_name), 'w') as f:
         f.write(summary_str)
         f.write(repr(episode_returns))
         f.write('\n\n')
@@ -359,19 +315,11 @@ if __name__ == '__main__':
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--onscreen_render', action='store_true')
     parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
-    parser.add_argument('--ckpt', action='store', type=str, help='ckpt_name', default=None)
+    parser.add_argument('--normalizer_path', action='store', type=str, help='normalizer_path', required=True)
+    # parser.add_argument('--ckpt', action='store', type=str, help='ckpt_name', default=None)
     parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
     parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
-    parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)
     parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
-    parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
-    parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
-
-    # for ACT
-    parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
-    parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
-    parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
-    parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
 
     # parser.add_argument('--ckpt_name', action='store', type=str, help='ckpt_name', required=False)
 
@@ -380,5 +328,9 @@ if __name__ == '__main__':
 
     # parser.add_argument('--loadckpt', action='store', type=str, help='train from pretrained policy ckpt', default=None)
 
+    resize_tf = get_image_transform(
+        in_res=(640,480),
+        out_res=(224,224)
+    )
     
     main(vars(parser.parse_args()))

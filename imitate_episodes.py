@@ -67,7 +67,7 @@ def main(args):
     # fixed parameters
     state_dim = 14  # 8 for roboset, 14 for sim_transfer_cube
     lr_backbone = 5e-6  # set to 0 if not fine-tuned
-    backbone = ['resnet18', 'resnet18'] # 'resnet18' or 'swin_tiny' or 'vit_b_16'
+    backbone = ['resnet18', 'swin_tiny'] # 'resnet18' or 'swin_tiny' or 'vit_b_16'
 
     camera_config = {
         'train_camera_names': task_config['train_camera_names'] if 'train_camera_names' in task_config else camera_names,
