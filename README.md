@@ -43,7 +43,7 @@ You can also add ``--onscreen_render`` to see real-time rendering during evaluat
 
 Please refer to [act](https://github.com/tonyzhaozh/act) for more training tips
 
-### test different backbones & different camera viewpoints
+### Test different backbones & different camera viewpoints
 In constants.py, one may alter the settings of:
         'train_camera_names': ['wrist', 'left'], # 'wrist', 'left', 'top'
         'test_camera_names': ['wrist', 'left'] # 'wrist', 'right', 'top'
@@ -54,9 +54,9 @@ backbone = ['resnet18', 'swin_tiny']
 ```
 one may use alternative 'resnet18' or 'swin_tiny' or 'vit_b_16'
 Note that the order of image processing in the backbone corresponds exactly to the order defined in train_camera_names and test_camera_names
-### comare with ACT baseline
+### Comare with ACT baseline
 You may set backbones to all resnet18 for ACT baseline
-### compare with Diffusion Policy
+### Compare with Diffusion Policy
 We adapt the evaluation and dataset generation for comparison with Diffusion Policy (DP).
 please follow [umi](https://github.com/real-stanford/universal_manipulation_interface) to config the python environments
 after the hdf5 files generate above, one may run scripts under dp_dataset to transfer to zarr.zip format
