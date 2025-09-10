@@ -35,7 +35,7 @@ def get_args_parser():
 
     parser.add_argument('--swin_local_ckpt', default='default', type=str, # will be overridden
                         help="Path to local checkpoint for Swin tiny")
-    parser.add_argument('--freeze_backbone', default=True, type=bool) # will be overridden
+    parser.add_argument('--freeze_backbone', default=False, type=bool) # will be overridden
     # * Transformer
     parser.add_argument('--enc_layers', default=4, type=int, # will be overridden
                         help="Number of encoding layers in the transformer")
