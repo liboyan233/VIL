@@ -19,14 +19,6 @@ import h5py
 from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
 from collections import defaultdict
-from umi.common.cv_util import (
-    parse_fisheye_intrinsics,
-    FisheyeRectConverter,
-    get_image_transform, 
-    draw_predefined_mask,
-    inpaint_tag,
-    get_mirror_crop_slices
-)
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs, JpegXl
 import argparse
@@ -43,6 +35,30 @@ observations/images/wrist (Dataset): shape=(400, 480, 640, 3), dtype=uint8
 observations/qpos (Dataset): shape=(400, 14), dtype=float32 -- jointspace
 observations/qvel (Dataset): shape=(400, 14), dtype=float32 -- noneeded
 """
+def get_image_transform(in_res, out_res, crop_ratio:float = 1.0, bgr_to_rgb: bool=False):
+    iw, ih = in_res
+    ow, oh = out_res
+    ch = round(ih * crop_ratio)
+    cw = round(ih * crop_ratio / oh * ow)
+    interp_method = cv2.INTER_AREA
+
+    w_slice_start = (iw - cw) // 2
+    w_slice = slice(w_slice_start, w_slice_start + cw)
+    h_slice_start = (ih - ch) // 2
+    h_slice = slice(h_slice_start, h_slice_start + ch)
+    c_slice = slice(None)
+    if bgr_to_rgb:
+        c_slice = slice(None, None, -1)
+
+    def transform(img: np.ndarray):
+        assert img.shape == ((ih,iw,3))
+        # crop
+        img = img[h_slice, w_slice, c_slice]
+        # resize
+        img = cv2.resize(img, out_res, interpolation=interp_method)
+        return img
+    
+    return transform
 
 def main(args):
     output = args.output
