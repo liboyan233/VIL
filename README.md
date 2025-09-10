@@ -57,13 +57,13 @@ Note that the order of image processing in the backbone corresponds exactly to t
 You may set backbones to all resnet18 for ACT baseline
 ### Compare with Diffusion Policy
 We adapt the evaluation and dataset generation for comparison with Diffusion Policy (DP).
-please follow [umi](https://github.com/real-stanford/universal_manipulation_interface) to config the python environments
-after the hdf5 files generate above, one may run scripts under dp_dataset to transfer to zarr.zip format
+please follow [umi](https://github.com/real-stanford/universal_manipulation_interface) to config the python environments and download the diffusion_policy folder in that repo to ./diffusion_policy
+after the hdf5 files generate above, one may run scripts under dp_dataset to transfer to zarr.zip format under ./dp_dataset/ 
 ```python
 python act1_dataset_transfer.py -i </path/to/hdf5/folder> -o <zarr file_name1> # for cube transfer
 python act2_dataset_transfer.py -i </path/to/hdf5/folder> -o <zarr file_name2> # for insertion
 ```
-Afterwards, one may do training with DP with minor modifications on task yaml files, we provide a demo yaml file in ./diffusion_policy/config/task/transfer_cube.yaml.
+Afterwards, one may do training with DP with minor modifications on task yaml files, we provide a demo yaml file in ./dp_dataset/transfer_cube.yaml.
 we further provide a demo script to evaluate dp within the above simulation environment:
 ```python
 python -W ignore eval_dp.py  --task_name sim_transfer_cube_scripted  --ckpt_dir /path/to/<some_dp_ckpt>.ckpt    --normalizer_path /path/to/dp/normalizer.pkl --policy_class DP --seed 0 --eval
