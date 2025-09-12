@@ -69,7 +69,7 @@ we further provide a demo script to evaluate dp within the above simulation envi
 python -W ignore eval_dp.py  --task_name sim_transfer_cube_scripted  --ckpt_dir /path/to/<some_dp_ckpt>.ckpt    --normalizer_path /path/to/dp/normalizer.pkl --policy_class DP --seed 0 --eval
 ```
 ### Hand-held gripper models
-comming soon
+[CAD Models](https://drive.google.com/drive/folders/15jRhqiBxu612BTisAuTE6C8DEEFC9AZC?usp=drive_link)
 
 <!-- ### Data acquisition & processing
 comming soon -->
