@@ -70,7 +70,9 @@ python -W ignore eval_dp.py  --task_name sim_transfer_cube_scripted  --ckpt_dir 
 ```
 ### Hand-held gripper models
 [CAD Models](https://drive.google.com/drive/folders/15jRhqiBxu612BTisAuTE6C8DEEFC9AZC?usp=drive_link)
-![Handheld Gripper](sources/handheld_gripper.jpg "Handheld Gripper")
+
+
+![Handheld Gripper](sources/handheld_gripper.JPG "Handheld Gripper")
 <!-- ### Data acquisition & processing
 comming soon -->
 
